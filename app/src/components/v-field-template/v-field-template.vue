@@ -3,15 +3,26 @@
 		<template #activator="{ toggle }">
 			<v-input :disabled="disabled">
 				<template #input>
-					<span
-						ref="contentEl"
-						class="content"
-						:contenteditable="!disabled"
-						@keydown="onKeyDown"
-						@input="onInput"
-						@click="onClick"
-					>
-						<span class="text" />
+					<span ref="contentEl" class="content" :contenteditable="!disabled" @keydown="onKeyDown" @input="onInput">
+						<template v-for="(element, i) of localValue">
+							<span
+								v-if="element.type === 'text' || element.type === 'empty'"
+								:key="`text-${i}`"
+								:class="element.type"
+								:data-index="i"
+							>
+								{{ element.type === 'text' ? element.text : '' }}
+							</span>
+							<span
+								v-else-if="element.type === 'button'"
+								:key="`button-${i}`"
+								:class="element.type"
+								:contenteditable="false"
+								:data-index="i"
+							>
+								<button @click="removeField(i)">{{ element.text }}</button>
+							</span>
+						</template>
 					</span>
 					<span v-if="placeholder && !modelValue" class="placeholder">{{ placeholder }}</span>
 				</template>
@@ -26,14 +37,20 @@
 			<field-list-item v-for="field in treeList" :key="field.field" :field="field" :depth="depth" @add="addField" />
 		</v-list>
 	</v-menu>
+	<v-input :slug="true" placeholder="hello"></v-input>
 </template>
 
 <script lang="ts">
-import { defineComponent, toRefs, ref, watch, onMounted, onUnmounted, PropType } from 'vue';
+import { defineComponent, toRefs, ref, nextTick, PropType } from 'vue';
 import FieldListItem from './field-list-item.vue';
 import { FieldTree } from './types';
 import { Field, Relation } from '@directus/shared/types';
 import { useFieldTree } from '@/composables/use-field-tree';
+
+type EditorNode =
+	| { type: 'text'; text: string }
+	| { type: 'button'; text: string; meta?: Record<string, unknown> }
+	| { type: 'empty' };
 
 export default defineComponent({
 	components: { FieldListItem },
@@ -76,125 +93,140 @@ export default defineComponent({
 		const { collection, inject } = toRefs(props);
 		const { treeList, loadFieldRelations } = useFieldTree(collection, inject);
 
-		watch(() => props.modelValue, setContent, { immediate: true });
+		const localValue = ref<EditorNode[]>([{ type: 'empty' }]);
 
-		onMounted(() => {
-			if (contentEl.value) {
-				contentEl.value.addEventListener('selectstart', onSelect);
-				setContent();
-			}
-		});
+		// watch(() => props.modelValue, setContent, { immediate: true });
 
-		onUnmounted(() => {
-			if (contentEl.value) {
-				contentEl.value.removeEventListener('selectstart', onSelect);
-			}
-		});
-
-		return { menuActive, treeList, addField, onInput, contentEl, onClick, loadFieldRelations, onKeyDown };
+		return {
+			contentEl,
+			menuActive,
+			localValue,
+			treeList,
+			onInput,
+			onKeyDown,
+			addField,
+			removeField,
+			loadFieldRelations,
+		};
 
 		function onInput() {
-			if (!contentEl.value) return;
+			const selection = getSelection();
 
-			const valueString = getInputValue();
-			emit('update:modelValue', valueString);
+			if (!selection || !contentEl.value) return;
+
+			const index = selection.startIndex;
+			const text = contentEl.value.children.item(index)?.textContent?.replace(/\u00a0/g, ' ');
+
+			if (!text) return;
+
+			localValue.value[index] = { type: 'text', text };
 		}
 
-		function onClick(event: MouseEvent) {
-			const target = event.target as HTMLElement;
-
-			if (target.tagName.toLowerCase() !== 'button') return;
-
-			const field = target.dataset.field;
-			emit('update:modelValue', props.modelValue.replace(`{{${field}}}`, ''));
-
-			const before = target.previousElementSibling;
-			const after = target.nextElementSibling;
-
-			if (!before || !after || !(before instanceof HTMLElement) || !(after instanceof HTMLElement)) return;
-
-			target.remove();
-			joinElements(before, after);
-			window.getSelection()?.removeAllRanges();
-			onInput();
-		}
-
-		function onKeyDown(event: KeyboardEvent) {
+		async function onKeyDown(event: KeyboardEvent) {
 			if (event.key === '{' || event.key === '}') {
 				event.preventDefault();
 				menuActive.value = true;
-			}
+			} else if (event.key === 'Enter') {
+				event.preventDefault();
+			} else if (event.key === 'Backspace') {
+				const selection = getSelection();
 
-			if (contentEl.value?.innerHTML === '') {
-				contentEl.value.innerHTML = '<span class="text"></span>';
-			}
-		}
+				if (!selection) return;
 
-		function onSelect() {
-			if (!contentEl.value) return;
-			const selection = window.getSelection();
-			if (!selection || selection.rangeCount <= 0) return;
-			const range = selection.getRangeAt(0);
-			if (!range) return;
-			const start = range.startContainer;
+				const index = selection.startIndex;
+				const offset = selection.startOffset;
+				const node = localValue.value[index];
+				const length = node.type === 'text' ? node.text.length : 0;
 
-			if (
-				!(start instanceof HTMLElement && start.classList.contains('text')) &&
-				!start.parentElement?.classList.contains('text')
-			) {
-				selection.removeAllRanges();
-				const range = new Range();
-				let textSpan = null;
+				if (length === 1 && offset === 1) {
+					event.preventDefault();
 
-				for (let i = 0; i < contentEl.value.childNodes.length || !textSpan; i++) {
-					const child = contentEl.value.children[i];
-					if (child.classList.contains('text')) {
-						textSpan = child;
+					localValue.value[index] = { type: 'empty' };
+				} else if (offset === 0) {
+					event.preventDefault();
+
+					const prev = localValue.value[index - 1];
+
+					if (index > 0 && prev.type === 'button') {
+						await removeField(index - 1);
 					}
 				}
+			} else if (event.key === 'Delete') {
+				const selection = getSelection();
 
-				if (!textSpan) {
-					textSpan = document.createElement('span');
-					textSpan.classList.add('text');
-					contentEl.value.appendChild(textSpan);
+				if (!selection) return;
+
+				const index = selection.startIndex;
+				const offset = selection.startOffset;
+				const node = localValue.value[index];
+				const length = node.type === 'text' ? node.text.length : 0;
+
+				if (length === 1 && offset === 0) {
+					event.preventDefault();
+
+					localValue.value[index] = { type: 'empty' };
+				} else if (offset === length) {
+					event.preventDefault();
+
+					const next = localValue.value[index + 1];
+
+					if (index < localValue.value.length - 1 && next.type === 'button') {
+						await removeField(index + 1);
+					}
 				}
-
-				range.setStart(textSpan, 0);
-				selection.addRange(range);
 			}
 		}
 
-		function addField(field: FieldTree) {
-			if (!contentEl.value) return;
+		async function addField(field: FieldTree) {
+			const selection = getSelection();
 
-			const button = document.createElement('button');
-			button.dataset.field = field.key;
-			button.setAttribute('contenteditable', 'false');
-			button.innerText = String(field.name);
+			if (!selection) return;
 
-			if (window.getSelection()?.rangeCount == 0) {
-				const range = document.createRange();
-				range.selectNodeContents(contentEl.value.children[0]);
-				window.getSelection()?.addRange(range);
+			const index = selection.startIndex;
+			const offset = selection.startOffset;
+			const node = localValue.value[index];
+
+			if (node.type === 'text') {
+				const length = node.text.length;
+
+				localValue.value.splice(
+					index,
+					1,
+					offset === 0 ? { type: 'empty' } : { type: 'text', text: node.text.substring(0, offset) },
+					{ type: 'button', text: field.name, meta: { key: field.key } },
+					offset === length ? { type: 'empty' } : { type: 'text', text: node.text.substring(offset, length) }
+				);
+			} else if (node.type === 'empty') {
+				localValue.value.splice(
+					index,
+					0,
+					{ type: 'empty' },
+					{ type: 'button', text: field.name, meta: { key: field.key } }
+				);
 			}
 
-			const range = window.getSelection()?.getRangeAt(0);
-			if (!range) return;
-			range.deleteContents();
+			await nextTick();
+			setSelection({ startIndex: index + 2 });
+		}
 
-			const end = splitElements();
+		async function removeField(index: number) {
+			const prev = localValue.value[index - 1];
+			const next = localValue.value[index + 1];
 
-			if (end) {
-				contentEl.value.insertBefore(button, end);
-				window.getSelection()?.removeAllRanges();
-			} else {
-				contentEl.value.appendChild(button);
-				const span = document.createElement('span');
-				span.classList.add('text');
-				contentEl.value.appendChild(span);
+			const offset = prev.type === 'text' ? prev.text.length : 0;
+
+			if (prev.type === 'text' && next.type === 'text') {
+				prev.text += next.text;
+
+				localValue.value.splice(index, 2);
+			} else if (prev.type === 'empty') {
+				localValue.value.splice(index - 1, 2);
+			} else if (next.type === 'empty') {
+				localValue.value.splice(index, 2);
 			}
 
-			onInput();
+			await nextTick();
+			setSelection({ startIndex: index - 1, startOffset: offset });
 		}
 
 		function findTree(tree: FieldTree[] | undefined, fieldSections: string[]): FieldTree | undefined {
@@ -205,34 +237,6 @@ export default defineComponent({
 			if (fieldObject === undefined) return undefined;
 			if (fieldSections.length === 1) return fieldObject;
 			return findTree(fieldObject.children, fieldSections.slice(1));
-		}
-
-		function joinElements(first: HTMLElement, second: HTMLElement) {
-			first.innerText += second.innerText;
-			second.remove();
-		}
-
-		function splitElements() {
-			const range = window.getSelection()?.getRangeAt(0);
-			if (!range) return;
-
-			const textNode = range.startContainer;
-			if (textNode.nodeType !== Node.TEXT_NODE) return;
-			const start = textNode.parentElement;
-			if (!start || !(start instanceof HTMLSpanElement) || !start.classList.contains('text')) return;
-
-			const startOffset = range.startOffset;
-
-			const left = start.textContent?.slice(0, startOffset) || '';
-			const right = start.textContent?.slice(startOffset) || '';
-
-			start.innerText = left;
-
-			const nextSpan = document.createElement('span');
-			nextSpan.classList.add('text');
-			nextSpan.innerText = right;
-			contentEl.value?.insertBefore(nextSpan, start.nextSibling);
-			return nextSpan;
 		}
 
 		function getInputValue() {
@@ -291,6 +295,65 @@ export default defineComponent({
 				contentEl.value.innerHTML = newInnerHTML;
 			}
 		}
+
+		function getSelection() {
+			const selection = window.getSelection();
+
+			if (!selection || selection.rangeCount === 0) return null;
+
+			const range = selection.getRangeAt(0);
+
+			if (!range) return null;
+
+			const startIndex =
+				range.startContainer instanceof HTMLElement
+					? range.startContainer.dataset.index
+					: range.startContainer.parentElement?.dataset.index;
+			const endIndex =
+				range.endContainer instanceof HTMLElement
+					? range.endContainer.dataset.index
+					: range.endContainer.parentElement?.dataset.index;
+
+			if (startIndex === undefined || endIndex === undefined) return null;
+
+			return {
+				startIndex: Number(startIndex),
+				startOffset: range.startOffset,
+				endIndex: Number(endIndex),
+				endOffset: range.endOffset,
+			};
+		}
+
+		function setSelection({
+			startIndex,
+			startOffset = 0,
+			endIndex = startIndex,
+			endOffset = startOffset,
+		}: {
+			startIndex: number;
+			startOffset?: number;
+			endIndex?: number;
+			endOffset?: number;
+		}) {
+			const selection = window.getSelection();
+
+			if (!selection || !contentEl.value) return;
+
+			selection.removeAllRanges();
+
+			const startNode = contentEl.value.children.item(startIndex);
+			const start = startNode?.classList.contains('empty') ? startNode : startNode?.childNodes.item(0);
+			const endNode = contentEl.value.children.item(endIndex);
+			const end = endNode?.classList.contains('empty') ? endNode : endNode?.childNodes.item(0);
+
+			if (!start || !end) return;
+
+			const range = document.createRange();
+			range.setStart(start, startOffset);
+			range.setEnd(end, endOffset);
+
+			selection.addRange(range);
+		}
 	},
 });
 </script>
@@ -302,23 +365,24 @@ export default defineComponent({
 	height: 100%;
 	padding: var(--input-padding) 0;
 	overflow: hidden;
-	font-size: 14px;
 	font-family: var(--family-monospace);
-	white-space: nowrap;
+	white-space: pre;
 }
 
-:deep(br) {
-	display: none;
+.content > :deep(span) {
+	display: inline-block;
 }
 
-:deep(span) {
-	min-width: 1px;
-	min-height: 1em;
+.content > :deep(.empty) {
+	width: 1px;
 }
 
-:deep(button) {
-	margin: -1px 4px 0;
-	padding: 2px 4px 0;
+.content > :deep(.empty:before) {
+	content: '\2060';
+}
+
+.content :deep(button) {
+	padding: 0 4px;
 	color: var(--primary);
 	background-color: var(--primary-alt);
 	border-radius: var(--border-radius);
@@ -327,7 +391,7 @@ export default defineComponent({
 	user-select: none;
 }
 
-:deep(button:not(:disabled):hover) {
+.content :deep(button:not(:disabled):hover) {
 	color: var(--white);
 	background-color: var(--danger);
 }
@@ -335,15 +399,10 @@ export default defineComponent({
 .placeholder {
 	position: absolute;
 	top: 50%;
-	left: 14px;
+	left: var(--input-padding);
 	color: var(--foreground-subdued);
 	transform: translateY(-50%);
 	user-select: none;
 	pointer-events: none;
-}
-
-.content > :deep(*) {
-	display: inline-block;
-	white-space: nowrap;
 }
 </style>
