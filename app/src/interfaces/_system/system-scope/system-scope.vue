@@ -4,9 +4,9 @@
 		<v-select v-else :model-value="value" :items="options" @update:model-value="onSelect" />
 		<drawer-collection
 			v-if="collection !== null"
-			:active="collection !== null"
+			:active="isDrawerOpen"
 			:collection="collection"
-			@update:active="collection = null"
+			@update:active="closeDrawer"
 			@input="onSelectItem"
 		/>
 	</div>
@@ -14,7 +14,7 @@
 
 <script lang="ts">
 import { useI18n } from 'vue-i18n';
-import { computed, defineComponent, ref, watch } from 'vue';
+import { computed, defineComponent, nextTick, ref, watch } from 'vue';
 import DrawerCollection from '@/views/private/components/drawer-collection.vue';
 import api from '@/api';
 import { userName } from '@/utils/user-name';
@@ -36,6 +36,7 @@ export default defineComponent({
 		const collection = ref<string | null>(null);
 		const itemName = ref<string | null>(null);
 		const loading = ref(false);
+		const isDrawerOpen = ref(false);
 
 		const isItem = computed(
 			() => props.value !== null && (props.value.startsWith('role_') || props.value.startsWith('user_'))
@@ -77,20 +78,32 @@ export default defineComponent({
 			return options;
 		});
 
-		return { options, collection, onSelect, onSelectItem, loading };
+		return { options, collection, onSelect, onSelectItem, closeDrawer, loading, isDrawerOpen };
 
-		function onSelect(value: string) {
+		async function onSelect(value: string) {
 			if (value === 'all') {
 				collection.value = null;
 				return emit('input', 'all');
 			}
 
 			collection.value = value;
+
+			await nextTick();
+
+			isDrawerOpen.value = true;
 		}
 
 		function onSelectItem(value: string[]) {
 			if (collection.value === 'directus_users') return emit('input', 'user_' + value[0]);
 			if (collection.value === 'directus_roles') return emit('input', 'role_' + value[0]);
+		}
+
+		async function closeDrawer() {
+			isDrawerOpen.value = false;
+
+			await nextTick();
+
+			collection.value = null;
 		}
 
 		async function loadItemName() {
