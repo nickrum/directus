@@ -12,7 +12,7 @@ program.version(pkg.version, '-v, --version');
 
 program
 	.command('create')
-	.arguments('<type> <name>')
+	.arguments('[type] [name]')
 	.description('Scaffold a new Directus extension')
 	.option('-l, --language <language>', 'specify the language to use')
 	.action(create);
