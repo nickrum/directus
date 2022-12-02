@@ -46,12 +46,14 @@ type BuildOptions = {
 	type?: string;
 	input?: string;
 	output?: string;
+	mode: 'local' | 'package';
 	watch?: boolean;
 	minify?: boolean;
 	sourcemap?: boolean;
 };
 
 export default async function build(options: BuildOptions): Promise<void> {
+	const mode = options.mode;
 	const watch = options.watch ?? false;
 	const sourcemap = options.sourcemap ?? false;
 	const minify = options.minify ?? false;

@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import create from './commands/create';
 import add from './commands/add';
 import build from './commands/build';
@@ -25,6 +25,7 @@ program
 	.option('-t, --type <type>', 'specify the extension type instead of reading from package manifest')
 	.option('-i, --input <file>', 'specify the entrypoint instead of reading from package manifest')
 	.option('-o, --output <file>', 'specify the output file instead of reading from package manifest')
+	.addOption(new Option('-m, --mode <mode>', 'specify the build mode').choices(['local', 'package']))
 	.option('-l, --language <language>', '[DEPRECATED]')
 	.option('-f, --force', '[DEPRECATED]')
 	.option('-w, --watch', 'watch and rebuild on changes')
